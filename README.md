@@ -108,4 +108,15 @@ another sign the bus is too busy for the current filter and should be narrowed f
   may not forward general body-CAN broadcasts. If `sniff` shows nothing correlated with the
   door switch, capturing while a dealer diagnostic tool (e.g. Techstream) performs its own
   door-lock actuator test can reveal the addressed request/response frames instead.
+
+## openpilot's community DBC files (opendbc)
+cover Toyota hybrids, and openpilot added support for the Lexus CT200h 2018, so these are the best public decoding hints for your car. In the Toyota hybrid DBC I checked, these messages are relevant:
+
+ID (hex)	Name	Useful content
+0x127	GEAR_PACKET	Gear: 0 = P, 1 = R, 2 = N, 3 = D, 4 = B
+0x620	SEATS_DOORS	Door-open flags for FL, FR, RR, RL, plus driver seatbelt unlatched
+0x1C4	ENGINE_RPM	RPM (as discussed, unreliable for hybrid "off")
+0xB4	SPEED	Vehicle speed
+
+
 # odb-tool
