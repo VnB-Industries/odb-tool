@@ -1,122 +1,43 @@
 # obd-idtool
-A diagnostic tool to sniff live CAN traffic and test candidate frames, to discover the
-CAN header + data bytes that lock/unlock a car's doors via the OBD-II port.
 
-This is **not** a production lock/unlock controller — it's a bench/reverse-engineering
-tool. Once you've confirmed the right frame(s), use them in your own trigger firmware.
+ESP32 firmware for controlling the door locks and inspecting CAN traffic through a Bluetooth ELM327 adapter. The `lock` and `unlock` commands are confirmed to operate the doors on a 2018 Lexus CT200h via the OBD-II port.
 
-## Hardware
-- ESP32 DevKit (classic, dual-core, has Bluetooth Classic)
-- vLinker FD (or other ELM327-compatible) Bluetooth Classic OBD2 adapter
+## Hardware and setup
 
-## Firmware
-Files:
-- `obd-idtool.ino` — BT connection state machine + Serial command shell
-- `config.h` — pins, ELM327 MAC address, timing constants
+- ESP32 DevKit with Bluetooth Classic
+- vLinker FD or another Bluetooth Classic ELM327-compatible adapter
+- Arduino IDE with the ESP32 board package and the `ELMduino` library
 
-### Required libraries (Arduino IDE Library Manager)
-- `ELMduino` (PowerBroker2/ELMduino) — ELM327 command/response handling
-- `BluetoothSerial` — bundled with the ESP32 board core, no separate install needed
+Set the adapter's Bluetooth address in `ELM327_MAC` in `config.h`, then flash `obd-idtool.ino` from the Arduino IDE. Open Serial Monitor at 115200 baud with Newline line endings. The firmware reconnects to the adapter automatically and prints the available commands when connected.
 
-### Setup
-1. Install the ESP32 board package and the `ELMduino` library in the Arduino IDE.
-2. Find your adapter's MAC address (pair it with a phone/PC first, or scan with an ESP32
-   BT scanner sketch) and set it in `ELM327_MAC` in `config.h`.
-3. Select the correct ESP32 board/port in the Arduino IDE and flash `obd-idtool.ino`
-   manually (no PlatformIO).
-4. Open the Serial Monitor at 115200 baud, line ending "Newline".
+## Door controls
 
-## Usage
-Once connected (see Serial log), these commands are available:
+Enter either command in Serial Monitor:
 
-- `sniff [durationMs]` — enables CAN headers (`ATH1`), then runs the adapter's monitor-all
-  mode (`ATMA`) for the given duration (default 15000 ms), printing every raw frame with a
-  relative timestamp. **Toggle the physical interior door lock/unlock switch while this
-  runs** (not the RF key fob — only bus traffic is visible). Run it once per direction and
-  compare the captures to spot the frame(s) that differ.
-- `filter <mask> <id>` — sets an ID mask/filter (`ATCM`/`ATCF`) so `sniff` only shows IDs
-  matching `<id>` under `<mask>`, e.g. `filter 700 000` keeps only IDs `0x000`-`0x0FF`.
-- `filter clear` — resets the mask to `000`/`000` (accept every ID again).
-- `scan [durationMsPerBlock]` — automates the filter+sniff binary search: steps through the
-  8 standard `0x100` ID blocks (`0x000`-`0x0FF`, `0x100`-`0x1FF`, ... `0x700`-`0x7FF`) one at
-  a time. For each block it applies the filter, waits for you to press Enter (so you can get
-  ready), then captures for `durationMsPerBlock` (default 5000 ms) while you toggle the door
-  switch, then prompts again before moving to the next block. Type `stop` + Enter at any
-  prompt to end the scan early; the filter is cleared automatically when it finishes.
-- `send <header> <data>` — sets the outgoing arbitration ID via `ATSH <header>`, then
-  transmits `<data>` as the raw frame payload, printing the adapter's response. Use this to
-  replay candidate frames found via `sniff`/`scan` and confirm which one actually actuates
-  the doors.
-- `lock` / `unlock` — shortcuts that inject the candidate frame defined by `DOOR_CMD_HEADER`/
-  `LOCK_CMD_DATA`/`UNLOCK_CMD_DATA` in `config.h` (currently header `750`, data
-  `4005301100400000` / `4005301100800000`, sourced from
-  [cydia2020/toyota-can-bus-multitool](https://github.com/cydia2020/toyota-can-bus-multitool)).
-  Sent fire-and-forget (`ATR0`) since a broadcast body frame gets no reply. **Unverified for
-  this vehicle/wiring** — that project taps the ADAS/Safety bus directly, not the OBD-II port.
-- `uds <tx> <rx> <data>` — full diagnostic exchange to one ECU: sets the tx header (`ATSH`),
-  the receive filter (`ATCRA`), and flow control, then sends `<data>` and prints the reply.
-  ELM327 handles ISO-TP framing automatically. Example: `uds 750 758 1003` (enter extended
-  session on the body ECU).
-- `tryunlock` — steps through a list of candidate Toyota body-ECU (`0x750`/`0x758`) unlock
-  sequences one at a time, pausing after each so you can see whether the doors moved and read
-  the ECU's reply (a `7F` response means "rejected", anything else is worth noting).
-
-Example:
-```
-sniff 20000
-scan 5000
-uds 750 758 1003
-tryunlock
-send 750 0227103601
+```text
+lock
+unlock
 ```
 
-## Unlocking the doors via OBD (Route B: blind UDS)
-Your Vlinker FD only reaches the OBD-II port, and on a 2018 CT200h the door locks are driven
-by the **Main Body ECU**, which responds to **diagnostic (UDS) requests** rather than plain
-broadcast frames — that's how the dealer tool (Techstream) unlocks doors through the same
-port. To try this without Techstream:
+The commands send a raw CAN frame to header `750`. The frame data is configured in `config.h`:
 
-1. Confirm the body ECU answers at all: `uds 750 758 1003`. A non-`7F` reply means it's
-   reachable and in an extended session. If you get no response, try other request/response
-   pairs (`uds 7C0 7C8 1003`, etc.) or sniff for which IDs reply.
-2. Run `tryunlock` and watch the doors after each candidate. The candidate list in
-   `tryBodyEcuUnlock()` is a starting set of guesses — edit it as you learn which service/DID
-   the ECU accepts.
-3. If nothing works, the reliable fallback (Route A) is capturing Techstream's "Door Lock
-   Control" Active Test on the DLC3 with a Y-splitter and replaying it with `uds`/`send`.
+| Command | Frame data |
+| --- | --- |
+| `lock` | `4005301100800000` |
+| `unlock` | `4005301100400000` |
 
-### Dealing with "BUFFER FULL"
-On a busy bus (e.g. HS-CAN at idle), `ATMA` generates far more traffic than the Bluetooth
-SPP link can drain, so the adapter's internal buffer overflows and it prints `BUFFER FULL`
-mid-stream, drowning out the low-frequency frame you actually care about. If you see this,
-narrow the bus with `filter` and binary-search: start with a wide mask (e.g.
-`filter 700 000` for the low half of the ID range), `sniff` and toggle the switch, then
-narrow further (`filter 780 000`, etc.) into whichever half keeps showing activity, until
-the volume is low enough to read cleanly. Run `filter clear` before trying a different
-range from scratch.
+## Other commands
 
-Repeated identical lines are collapsed to one entry with a `(xN)` count so a single
-high-frequency frame doesn't bury the one that changes when you operate the switch. A
-`<DATA ERROR` suffix on a line is the adapter itself flagging a bus reception error for
-that frame (normal ELM327 behavior) — frequent occurrences alongside `BUFFER FULL` are
-another sign the bus is too busy for the current filter and should be narrowed further.
+- `sniff [durationMs]` captures CAN traffic for 15 seconds by default. Operate the physical door switch during capture to inspect related traffic.
+- `filter <mask> <id>` limits captured CAN IDs; `filter clear` removes the filter.
+- `scan [durationMsPerBlock]` captures each of eight 0x100-ID blocks, 5 seconds per block by default. Press Enter to begin each capture; enter `stop` at a prompt to end early.
+- `send <header> <data>` sends a custom raw CAN frame.
+- `uds <tx> <rx> <data>` sends a diagnostic request and displays the response.
+- `ecuscan` probes diagnostic IDs from `0x700` to `0x7EF`; `idscan` reads identification data from the responders found by `ecuscan`.
+- `tryunlock [tx] [rx]` tries diagnostic unlock candidates, using `750`/`758` by default.
 
-## Notes
-- Test only with the vehicle safely parked — sending an incorrect frame can trigger
-  unintended ECU behavior.
-- On some vehicles the OBD port only exposes the powertrain (HS-CAN) bus and the gateway
-  may not forward general body-CAN broadcasts. If `sniff` shows nothing correlated with the
-  door switch, capturing while a dealer diagnostic tool (e.g. Techstream) performs its own
-  door-lock actuator test can reveal the addressed request/response frames instead.
+On a busy CAN bus, `sniff` may report `BUFFER FULL`. Use `filter` to narrow the captured ID range.
 
-## openpilot's community DBC files (opendbc)
-cover Toyota hybrids, and openpilot added support for the Lexus CT200h 2018, so these are the best public decoding hints for your car. In the Toyota hybrid DBC I checked, these messages are relevant:
+## Safety
 
-ID (hex)	Name	Useful content
-0x127	GEAR_PACKET	Gear: 0 = P, 1 = R, 2 = N, 3 = D, 4 = B
-0x620	SEATS_DOORS	Door-open flags for FL, FR, RR, RL, plus driver seatbelt unlatched
-0x1C4	ENGINE_RPM	RPM (as discussed, unreliable for hybrid "off")
-0xB4	SPEED	Vehicle speed
-
-
-# odb-tool
+Use only while the vehicle is safely parked. The raw frame values are vehicle-specific; verify them before using this firmware with another vehicle.
