@@ -1,5 +1,7 @@
 #pragma once
 
+#include <mcp_can.h>
+
 // ---- Debug ----
 #define DEBUG_ENABLED 1 // set to 0 to silence Serial debug output
 
@@ -11,29 +13,31 @@
   #define DEBUG_PRINTLN(...)
 #endif
 
-// ---- ELM327 Bluetooth Classic (SPP) adapter ----
-// MAC address of the paired ELM327 dongle, e.g. from `hcitool scan` or the ESP32 BT scanner sketch.
-static const uint8_t ELM327_MAC[6] = {0xDC, 0x0D, 0x30, 0xE2, 0x4B, 0xE1}; // vLinker FD
-static const char* const BT_PIN = "1234"; // legacy pairing PIN for the vLinker FD
+// ---- MCP2515 CAN controller (SPI) ----
+// Module: MCP2515 + SN65HVD230 combo board. SN65HVD230 is 3.3V-native, same logic level as the
+// ESP32, so VCC wires to 3.3V (not 5V) and no level-shifting is needed - see README.md.
+// ESP32 VSPI default pins: SCK=18, MISO=19, MOSI=23. Only CS and INT are configurable here.
+static const uint8_t MCP_CS_PIN  = 5; // MCP2515 CS
+static const uint8_t MCP_INT_PIN = 4; // MCP2515 INT (reserved; not needed for TX-only use)
+
+// Crystal on the MCP2515 module - this is the setting most likely wrong on a cheap breakout.
+// Common blue modules: 8MHz. Some modules (e.g. with a CAN transceiver breakout): 16MHz.
+// Wrong value: begin() still returns CAN_OK, but bit timing is off and frames won't ACK on the bus.
+#define MCP_OSC_FREQ MCP_8MHZ // MCP_8MHZ or MCP_16MHZ
+
+// '6' on the old ELM327 build = ISO 15765-4 CAN, 11-bit ID, 500 kbps. Match that here.
+#define MCP_CAN_SPEED CAN_500KBPS
 
 // ---- GPIO ----
 static const uint8_t LED_PIN = 2; // onboard LED, connection status indicator
 
 // ---- Timing ----
-static const uint32_t ELM_TIMEOUT_MS           = 1000; // ELM327 response timeout per AT command
-static const uint32_t BT_RECONNECT_INTERVAL_MS = 3000; // delay between connection attempts
-static const uint32_t DEFAULT_SNIFF_DURATION_MS = 15000; // default "sniff" capture window
-static const uint32_t DEFAULT_SCAN_BLOCK_DURATION_MS = 5000; // default per-block capture window for "scan"
-static const uint32_t UDS_TIMEOUT_MS           = 3000; // longer window for diagnostic-session responses
-
-// ---- CAN protocol ----
-// '6' = ISO 15765-4 CAN, 11-bit ID, 500 kbps (Toyota/Lexus powertrain + body). Locking this avoids "SEARCHING...".
-static const char CAN_PROTOCOL = '6';
+static const uint32_t MCP_RETRY_INTERVAL_MS = 1000; // delay between MCP2515 init attempts
 
 // ---- Door lock/unlock frame (VERIFIED working on 2018 Lexus CT200h via OBD-II) ----
-// Raw single CAN frame (send with ATCAF0). Toyota body active test: sub-addr 0x40, len 0x05,
+// Standard 11-bit CAN frame, DLC 8. Toyota body active test: sub-addr 0x40, len 0x05,
 // service 0x30 (inputOutputControlByLocalIdentifier), LID 0x11 (door lock), control 0x00 XX.
 // Frame origin: cydia2020/toyota-can-bus-multitool. Control byte 0x80 = lock, 0x40 = unlock on this car.
-static const char* const DOOR_CMD_HEADER = "750";
-static const char* const LOCK_CMD_DATA   = "4005301100800000";
-static const char* const UNLOCK_CMD_DATA = "4005301100400000";
+static const uint32_t DOOR_CMD_ID = 0x750;
+static const uint8_t LOCK_CMD_DATA[8]   = {0x40, 0x05, 0x30, 0x11, 0x00, 0x80, 0x00, 0x00};
+static const uint8_t UNLOCK_CMD_DATA[8] = {0x40, 0x05, 0x30, 0x11, 0x00, 0x40, 0x00, 0x00};
